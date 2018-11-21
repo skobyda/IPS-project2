@@ -9,6 +9,7 @@
 #include <stdbool.h> // bool
 #include <assert.h> // assert
 
+
 #ifdef NDEBUG
 /**
  * The structure header encapsulates data of a single memory block.
@@ -96,7 +97,14 @@ Arena *arena_alloc(size_t req_size)
 
     req_size = allign_page(req_size);
 
-    Arena *arena = mmap(NULL, req_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS, -1, 0); // FIXME
+    Arena *arena = mmap(
+        NULL, 
+	req_size, 
+	PROT_READ | PROT_WRITE | PROT_EXEC, 
+	MAP_ANONYMOUS, 
+	-1,
+	0
+    ); // FIXME
 
     if (arena == MAP_FAILED)
         return NULL;
@@ -280,9 +288,54 @@ Header *hdr_get_prev(Header *hdr)
  */
 void *mmalloc(size_t size)
 {
-    // FIXME
-    (void)size;
-    return NULL;
+    if (!size)
+    	return NULL;
+    
+    /* if first_arena NULL, create arena */
+    if (!first_arena){
+	Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
+        arena_append(a);
+
+        /* if first_arena was not posible to create return NULL*/
+	if (!first_arena)
+            return NULL;
+
+        /* Create hdr */	
+    	Header *hdr;
+        hdr_ctor(hdr, size);
+	hdr = first_fit(size);
+
+	Header *prev;
+	prev = hdr_get_prev(hdr);
+	prev->next = hdr;
+        
+	/* everything OK return pointer to memory */
+        return hdr;
+    } else {
+
+	/* create hdr */
+        Header *hdr;
+	hdr_ctor(hdr, size); 
+	hdr = first_fit(size);
+	
+        
+	/* if theres no memory, alloc new arena for hdr */
+	if(!hdr){
+            Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
+            arena_append(a);
+        }
+
+        /* now should be enough memory for hdr */
+        hdr = first_fit(size);
+
+	Header *prev;
+	prev = hdr_get_prev(hdr);
+	prev->next = hdr;
+
+        return hdr;
+    }	
+ 
+    return NULL;				
 }
 
 /**
@@ -293,8 +346,8 @@ void *mmalloc(size_t size)
 void mfree(void *ptr)
 {
     assert(ptr != NULL);
+
     (void)ptr;
-    // FIXME
 }
 
 /**
@@ -306,7 +359,9 @@ void mfree(void *ptr)
  */
 void *mrealloc(void *ptr, size_t size)
 {
-    // FIXME
+    if (!size)
+        return NULL;
+
     (void)ptr;
     (void)size;
     return NULL;
