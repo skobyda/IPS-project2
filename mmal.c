@@ -8,8 +8,13 @@
 #include <sys/mman.h> // mmap
 #include <stdbool.h> // bool
 #include <assert.h> // assert
+//#include <stdio.h> // TODO DELETE
+//#include <errno.h> // TODO DELETE
+//#include <string.h> // TODO DELETE
 
-
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS 0x20
+#endif
 #ifdef NDEBUG
 /**
  * The structure header encapsulates data of a single memory block.
@@ -98,18 +103,20 @@ Arena *arena_alloc(size_t req_size)
     req_size = allign_page(req_size);
 
     Arena *arena = mmap(
-        NULL, 
-	req_size, 
-	PROT_READ | PROT_WRITE | PROT_EXEC, 
-	MAP_ANONYMOUS, 
+        NULL,
+	req_size,
+	PROT_READ | PROT_WRITE,
+	MAP_ANONYMOUS | MAP_PRIVATE,
 	-1,
 	0
     ); // FIXME
 
     if (arena == MAP_FAILED)
         return NULL;
-    else
-        return arena;
+
+    arena->next = NULL;
+    arena->size = req_size;
+    return arena;
 }
 
 /**
@@ -196,9 +203,12 @@ Header *hdr_split(Header *hdr, size_t req_size)
 {
     assert((hdr->size >= req_size + 2*sizeof(Header)));
     Header *p = hdr;
-    p = p + sizeof(Header) + req_size;
+    p = (void*) p + sizeof(Header) + req_size;
 
-    p->next = hdr->next;
+    if (hdr->next)
+        p->next = hdr->next;
+    else //if there is only hdr
+        p->next = hdr;
     hdr->next = p;
 
     p->size = hdr->size - req_size - sizeof(Header);
@@ -237,7 +247,10 @@ void hdr_merge(Header *left, Header *right)
     assert(left->next == right);
     assert(left != right);
 
-    left->next = right->next;
+    if (right->next != left)
+        left->next = right->next;
+    else
+        left->next = NULL;
     left->size = left->size + right->size + sizeof(Header);
 }
 
@@ -250,11 +263,11 @@ void hdr_merge(Header *left, Header *right)
 static
 Header *first_fit(size_t size)
 {
-    Header *hdr = ((void *) first_arena) + sizeof(Arena);
+    Header *hdr = (void *) first_arena + sizeof(Arena);
     Header *first = hdr;
-    while (hdr->asize && (hdr->size < size)) {
+    while (hdr->asize || (hdr->size < size)) {
         hdr = hdr->next;
-        if (hdr == first)
+        if (hdr == first || !hdr)
             return NULL;
     }
 
@@ -289,53 +302,69 @@ Header *hdr_get_prev(Header *hdr)
 void *mmalloc(size_t size)
 {
     if (!size)
-    	return NULL;
-    
+        return NULL;
+
     /* if first_arena NULL, create arena */
     if (!first_arena){
-	Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
+        Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
+        if (!a)
+            return NULL;
         arena_append(a);
 
-        /* if first_arena was not posible to create return NULL*/
-	if (!first_arena)
-            return NULL;
-
-        /* Create hdr */	
-    	Header *hdr;
-        hdr_ctor(hdr, size);
-	hdr = first_fit(size);
-
-	Header *prev;
-	prev = hdr_get_prev(hdr);
-	prev->next = hdr;
-        
-	/* everything OK return pointer to memory */
-        return hdr;
-    } else {
-
-	/* create hdr */
-        Header *hdr;
-	hdr_ctor(hdr, size); 
-	hdr = first_fit(size);
-	
-        
-	/* if theres no memory, alloc new arena for hdr */
-	if(!hdr){
-            Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
-            arena_append(a);
-        }
-
-        /* now should be enough memory for hdr */
+        /* Create hdr */
+        Header *hdr = (void *) a + sizeof(Arena);
+        hdr_ctor(hdr, a->size - sizeof(Arena) - sizeof (Header));
         hdr = first_fit(size);
 
-	Header *prev;
-	prev = hdr_get_prev(hdr);
-	prev->next = hdr;
+        if (hdr_should_split(hdr, size))
+            (void) hdr_split(hdr, size);
 
-        return hdr;
-    }	
- 
-    return NULL;				
+        hdr->asize = size;
+        void *p = (void *)hdr + sizeof(Header);
+
+        /* everything OK return pointer to memory */
+        return p;
+    } else {
+        /* create hdr */
+        Header *hdr;
+        hdr = first_fit(size);
+
+        /* if theres no memory, alloc new arena for hdr */
+        if(!hdr) { // TODO
+            Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
+            if (!a)
+                return NULL;
+            arena_append(a);
+
+            /* Create hdr of new arena */ //TODO maybe move to arena_alloc
+            Header *hdr2 = (void *) a + sizeof(Arena);
+            hdr_ctor(hdr2, a->size - sizeof(Arena) - sizeof (Header));
+            Header *first = (void *) first_arena + sizeof(Arena);
+            Header *last;
+            if (first->next)
+                last = hdr_get_prev(first);
+            else
+                last = first;
+            last->next = hdr2;
+            hdr2->next = first;
+
+            /* now should be enough memory for hdr */
+            hdr = first_fit(size);
+            printf("HELOOOOOOOOOOOOOOOOOOOOOOOOO %p\n", hdr);
+        }
+
+        if (hdr_should_split(hdr, size))
+            (void) hdr_split(hdr, size);
+        //else
+        //TODO
+        hdr->asize = size;
+        void *p = (void *)hdr + sizeof(Header);
+
+        /* everything OK return pointer to memory */
+        return p;
+    }
+
+    return NULL;
 }
 
 /**
@@ -347,7 +376,27 @@ void mfree(void *ptr)
 {
     assert(ptr != NULL);
 
-    (void)ptr;
+    Header *hdr = (void *) ptr - sizeof(Header);
+    Header *prev = hdr_get_prev(hdr);
+    Header *first = (void *) first_arena + sizeof(Arena);
+
+    hdr->asize = 0;
+
+    if (hdr_can_merge(hdr, hdr->next))
+        hdr_merge(hdr, hdr->next);
+
+    if ((hdr != first) && hdr_can_merge(prev, hdr))
+        hdr_merge(prev, hdr);
+
+    //if (prev == hdr)
+    //    return;
+
+    //prev->next = hdr->next;
+
+    //if (first == hdr)
+    //    first->
+    //printf("jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj %p\n", prev);
+
 }
 
 /**
