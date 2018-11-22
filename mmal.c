@@ -101,14 +101,8 @@ Arena *arena_alloc(size_t req_size)
 
     req_size = allign_page(req_size);
 
-    Arena *arena = mmap(
-        NULL,
-	req_size,
-	PROT_READ | PROT_WRITE,
-	MAP_ANONYMOUS | MAP_PRIVATE,
-	-1,
-	0
-    ); // FIXME
+    Arena *arena = mmap(NULL, req_size, PROT_READ | PROT_WRITE,
+                        MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
     if (arena == MAP_FAILED)
         return NULL;
@@ -206,7 +200,7 @@ Header *hdr_split(Header *hdr, size_t req_size)
 
     if (hdr->next)
         p->next = hdr->next;
-    else //if there is only hdr
+    else //if there is only one hdr
         p->next = hdr;
     hdr->next = p;
 
@@ -230,7 +224,9 @@ bool hdr_can_merge(Header *left, Header *right)
 {
     assert(left->next == right);
     assert(left != right);
-    return (!(left->asize) && !(right->asize));
+    return (!(left->asize) && !(right->asize) &&
+            ((long)(left->size + sizeof(Header)) == ((char *)right - (char *)left)));
+                //To not merge blocks in different arenas
 }
 
 /**
@@ -300,6 +296,9 @@ Header *hdr_get_prev(Header *hdr)
  */
 void *mmalloc(size_t size)
 {
+    /* create hdr */
+    Header *hdr;
+
     if (!size)
         return NULL;
 
@@ -311,58 +310,42 @@ void *mmalloc(size_t size)
         arena_append(a);
 
         /* Create hdr */
-        Header *hdr = (void *) a + sizeof(Arena);
+        hdr = (void *) a + sizeof(Arena);
         hdr_ctor(hdr, a->size - sizeof(Arena) - sizeof (Header));
-        hdr = first_fit(size);
 
-        if (hdr_should_split(hdr, size))
-            (void) hdr_split(hdr, size);
-
-        hdr->asize = size;
-        void *p = (void *)hdr + sizeof(Header);
-
-        /* everything OK return pointer to memory */
-        return p;
     } else {
-        /* create hdr */
-        Header *hdr;
         hdr = first_fit(size);
 
-        /* if theres no memory, alloc new arena for hdr */
-        if(!hdr) { // TODO
+        /* if theres not enough memory, alloc new arena for hdr */
+        if(!hdr) {
             Arena *a = arena_alloc(size + sizeof(Arena) + sizeof(Header));
             if (!a)
                 return NULL;
             arena_append(a);
 
-            /* Create hdr of new arena */ //TODO maybe move to arena_alloc
-            Header *hdr2 = (void *) a + sizeof(Arena);
-            hdr_ctor(hdr2, a->size - sizeof(Arena) - sizeof (Header));
+            /* Create hdr of new arena */
+            hdr = (void *) a + sizeof(Arena);
+            hdr_ctor(hdr, a->size - sizeof(Arena) - sizeof (Header));
+
+            /* Inserts it into list of Headers */
             Header *first = (void *) first_arena + sizeof(Arena);
             Header *last;
             if (first->next)
                 last = hdr_get_prev(first);
             else
                 last = first;
-            last->next = hdr2;
-            hdr2->next = first;
-
-            /* now should be enough memory for hdr */
-            hdr = first_fit(size);
+            last->next = hdr;
+            hdr->next = first;
         }
-
-        if (hdr_should_split(hdr, size))
-            (void) hdr_split(hdr, size);
-        //else
-        //TODO
-        hdr->asize = size;
-        void *p = (void *)hdr + sizeof(Header);
-
-        /* everything OK return pointer to memory */
-        return p;
     }
 
-    return NULL;
+    if (hdr_should_split(hdr, size))
+        (void) hdr_split(hdr, size);
+
+    hdr->asize = size;
+    void *p = (void *)hdr + sizeof(Header);
+
+    return p;
 }
 
 /**
@@ -380,22 +363,11 @@ void mfree(void *ptr)
 
     hdr->asize = 0;
 
-    if (hdr_can_merge(hdr, hdr->next) &&
-        ((long)(hdr->size + sizeof(Header)) == ((char *)hdr->next - (char *)hdr))) //To not merge blocks in different arenas
+    if (hdr_can_merge(hdr, hdr->next))
         hdr_merge(hdr, hdr->next);
 
-    if ((hdr != first) && hdr_can_merge(prev, hdr) &&
-        ((long)(prev->size + sizeof(Header)) == ((char *)hdr - (char *)prev))) //To not merge blocks in different arenas
+    if ((hdr != first) && hdr_can_merge(prev, hdr))
         hdr_merge(prev, hdr);
-
-    //if (prev == hdr)
-    //    return;
-
-    //prev->next = hdr->next;
-
-    //if (first == hdr)
-    //    first->
-    //printf("jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj %p\n", prev);
 
 }
 

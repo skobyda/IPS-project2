@@ -1,4 +1,4 @@
-CFLAGS=-std=gnu99 -Wall -Wextra -g
+CFLAGS=-std=c99 -Wall -Wextra -g
 test_mmal: mmal.o test_mmal.o
 	gcc -o $@ $^
 test: test_mmal
