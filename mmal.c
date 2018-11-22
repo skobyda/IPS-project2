@@ -1,3 +1,4 @@
+//xsalon01
 /**
  * Implementace My MALloc
  * Demonstracni priklad pro 1. ukol IPS/2018
@@ -8,8 +9,6 @@
 #include <sys/mman.h> // mmap
 #include <stdbool.h> // bool
 #include <assert.h> // assert
-#include <stdio.h> // TODO DELETE
-#include <string.h> // TODO DELETE
 
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS 0x20
@@ -386,7 +385,10 @@ void *mrealloc(void *ptr, size_t size)
     if (!newptr)
         return NULL;
 
-    memcpy(newptr, ptr, hdr->asize);
+    char *ptr_byte = (char *) ptr;
+    char *newptr_byte = (char *) newptr;
+    for (size_t i = 0; i < hdr->asize; i++)
+        newptr_byte[i] = ptr_byte[i];
 
     mfree(ptr);
 
