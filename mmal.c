@@ -8,9 +8,8 @@
 #include <sys/mman.h> // mmap
 #include <stdbool.h> // bool
 #include <assert.h> // assert
-//#include <stdio.h> // TODO DELETE
-//#include <errno.h> // TODO DELETE
-//#include <string.h> // TODO DELETE
+#include <stdio.h> // TODO DELETE
+#include <string.h> // TODO DELETE
 
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS 0x20
@@ -350,7 +349,6 @@ void *mmalloc(size_t size)
 
             /* now should be enough memory for hdr */
             hdr = first_fit(size);
-            printf("HELOOOOOOOOOOOOOOOOOOOOOOOOO %p\n", hdr);
         }
 
         if (hdr_should_split(hdr, size))
@@ -382,10 +380,12 @@ void mfree(void *ptr)
 
     hdr->asize = 0;
 
-    if (hdr_can_merge(hdr, hdr->next))
+    if (hdr_can_merge(hdr, hdr->next) &&
+        ((long)(hdr->size + sizeof(Header)) == ((char *)hdr->next - (char *)hdr))) //To not merge blocks in different arenas
         hdr_merge(hdr, hdr->next);
 
-    if ((hdr != first) && hdr_can_merge(prev, hdr))
+    if ((hdr != first) && hdr_can_merge(prev, hdr) &&
+        ((long)(prev->size + sizeof(Header)) == ((char *)hdr - (char *)prev))) //To not merge blocks in different arenas
         hdr_merge(prev, hdr);
 
     //if (prev == hdr)
@@ -408,10 +408,15 @@ void mfree(void *ptr)
  */
 void *mrealloc(void *ptr, size_t size)
 {
-    if (!size)
+    Header *hdr = (void *)ptr - sizeof(Header);
+
+    void *newptr = mmalloc(size);
+    if (!newptr)
         return NULL;
 
-    (void)ptr;
-    (void)size;
-    return NULL;
+    memcpy(newptr, ptr, hdr->asize);
+
+    mfree(ptr);
+
+    return newptr;
 }
